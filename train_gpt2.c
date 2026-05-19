@@ -23,3 +23,21 @@ typedef struct {
     float* lnfw; // 最終層のLN（T, C)。加算され続けた分散のスケールを安定させる。
     float* lnfb; // バイアス項(T, C)。
 } ParameterTensors;
+
+void encoder_forward(float* out, int* inp, float* wte, float* wpe, int B, int T, int C) {
+    // out: (B, T, C)
+    // inp: (B, T)
+    // wte: (V, C)
+    // wpe: (maxT, C)
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            int ix = inp[b * T + t];
+            float* out_bt = out + b * T * C + t * C;
+            float* wte_ix = wte + ix * C;
+            float* wpe_t = wpe + t * C;
+            for (int c = 0; c < C; c++) {
+                out_bt[c] = wte_ix[c] + wpe_t[c];
+            }
+        }
+    }
+}
