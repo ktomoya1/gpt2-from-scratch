@@ -1,3 +1,5 @@
+#include <math.h>
+
 typedef struct {
     int max_seq_len; // 入力トークンの最大個数。
     int vocab_size; // 語彙の種類数。
@@ -38,6 +40,38 @@ void encoder_forward(float* out, int* inp, float* wte, float* wpe, int B, int T,
             for (int c = 0; c < C; c++) {
                 out_bt[c] = wte_ix[c] + wpe_t[c];
             }
+        }
+    }
+}
+
+void layernorm_forward(float* out, float* mean, float* rstd,
+                        float* inp, float* weight, float* bias,
+                         int B, int T, int C) {
+    // out, inp: (B, T, C)
+    // weight, bias: (C)
+    // mean, rstd: (B, T)
+    float eps = 1e-5f;
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            float* inp_bt = inp + b * T * C + t * C;
+            float m = 0;
+            for (int c = 0; c < C; c++) {
+                m += inp_bt[c];
+            }
+            m /= C;
+            float v = 0;
+            for (int c = 0; c < C; c++) {
+                float x = inp_bt[c] - m;
+                v += x * x;
+            }
+            v /= C;
+            float rstd_t = 1.0f / sqrtf(v + eps);
+            float* out_bt = out + b * T * C + t * C;
+            for (int c = 0; c < C; c++) {
+                out_bt[c] = weight[c] * (inp_bt[c] - m) * rstd_t + bias[c];
+            }
+            mean[b * T + t] = m;
+            rstd[b * T + t] = rstd_t;
         }
     }
 }
