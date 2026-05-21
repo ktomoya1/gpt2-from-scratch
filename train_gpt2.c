@@ -75,3 +75,51 @@ void layernorm_forward(float* out, float* mean, float* rstd,
         }
     }
 }
+
+void attention_forward(float* out, float* inp, int B, int T, int C, int NH) {
+    // out: (B, T, C)
+    // inp: (B, T, 3*C)
+    int hs = C / NH;
+    int C3 = 3*C;
+    float scale = 1.0f / sqrtf(hs);
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            for (int h = 0; h < NH; h++) {
+                float att[T];
+                // 1. query_t dot key_t2
+                float* query_t = inp + b * T * C3 + t * C3 + h * hs;
+                for (int t2 = 0; t2 < T; t2++) {
+                    if (t2 <= t) {
+                        att[t2] = 0.0f;
+                        float* key_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C;
+                        for (int i = 0; i < hs; i++) {
+                            att[t2] += query_t[i] * key_t2[i];
+                        }
+                        att[t2] *= scale;
+                    } else {
+                        att[t2] = 0.0f;
+                    }
+                }
+                // 2. softmax
+                float exp_sum = 0.0f;
+                for (int t2 = 0; t2 <= t; t2++) {
+                    exp_sum += expf(att[t2]);
+                }
+                float exp_inv = (exp_sum == 0.0f ? 0.0f : 1.0f / exp_sum);
+                for (int t2 = 0; t2 <= t; t2++) {
+                    att[t2] = expf(att[t2]) * exp_inv;
+                }
+                // 3. out <- att[t2] * value_t2
+                float* out_bth = out + b * T * C + t * C + h * hs;
+                for (int i = 0; i < hs; i++) { out_bth[i] = 0.0f; }
+                for (int t2 = 0; t2 <= t; t2++) {
+                    float att_t2 = att[t2];
+                    float* value_t2 = inp + b * T * C3 + t2 * C3 + h * hs + 2*C;
+                    for (int i = 0; i < hs; i++) {
+                        out_bth[i] += att_t2 * value_t2[i];
+                    }
+                }
+            }
+        }
+    }
+}
