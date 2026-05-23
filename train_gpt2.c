@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <math.h>
 
 typedef struct {
@@ -119,6 +120,28 @@ void attention_forward(float* out, float* inp, int B, int T, int C, int NH) {
                         out_bth[i] += att_t2 * value_t2[i];
                     }
                 }
+            }
+        }
+    }
+}
+
+void matmul_forward_native(float* out, const float* inp,
+                            const float* weight, const float* bias,
+                            int B, int T, int C, int OC) {
+    // out: (B, T, OC)
+    // inp: (B, T, C)
+    // weight: (OC, C)
+    // bias: (OC)
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            for (int o = 0; o < OC; o++) {
+                float val = (bias == NULL) ? 0.0f : bias[o];
+                const float* inp_bt = inp + b * T * C + t * C;
+                for (int c = 0; c < C; c++) {
+                    val += inp_bt[c] * weight[o * C + c];
+                }
+                float* out_bt = out + b * T * OC + t * OC;
+                out_bt[o] = val;
             }
         }
     }
