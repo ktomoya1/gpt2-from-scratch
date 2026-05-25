@@ -177,3 +177,13 @@ void matmul_forward(float* out, const float* inp,
         }
     }
 }
+
+// 役割：ニューラルネットワークの層が深くなると勾配が消失する問題->近道を作ることで緩和する
+void residual_forward(float* out, float* inp1, float* inp2, int N) {
+    // out, inp1, inp2: (B, T, C)
+    // inp1: 残差ストリーム, inp2: サブレイヤーの出力
+    // N: B*T*C
+    for (int i = 0; i < N; i++) {
+        out[i] = inp1[i] + inp2[i];
+    }
+}
