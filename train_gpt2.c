@@ -125,7 +125,7 @@ void attention_forward(float* out, float* inp, int B, int T, int C, int NH) {
     }
 }
 
-void matmul_forward_native(float* out, const float* inp,
+void matmul_forward_naive(float* out, const float* inp,
                             const float* weight, const float* bias,
                             int B, int T, int C, int OC) {
     // out: (B, T, OC)
@@ -142,6 +142,37 @@ void matmul_forward_native(float* out, const float* inp,
                 }
                 float* out_bt = out + b * T * OC + t * OC;
                 out_bt[o] = val;
+            }
+        }
+    }
+}
+
+void matmul_forward(float* out, const float* inp,
+                    const float* weight, const float* bias,
+                    int B, int T, int C, int OC) {
+    // out: (B, T, OC)
+    // inp: (B, T, C)
+    // weight: (OC, C)
+    // bias: (OC)
+    const int LOOP_UNROLL = 8;
+    if (B * T % LOOP_UNROLL != 0) {
+        matmul_forward_naive(out, inp, weight, bias, B, T, C, OC);
+        return;
+    }
+    for (int obt = 0; obt < B * T; obt += LOOP_UNROLL) {
+        for (int o = 0; o < OC; o++) {
+            float result[LOOP_UNROLL];
+            for (int ibt = 0; ibt < LOOP_UNROLL; ibt++) {
+                result[ibt] = (bias == NULL) ? 0.0f : bias[o];
+            }
+            for (int c = 0; c < C; c++) {
+                float w = weight[o * C + c];
+                for (int ibt = 0; ibt < LOOP_UNROLL; ibt++) {
+                    result[ibt] += inp[(obt + ibt) * C + c] * w;
+                }
+            }
+            for (int ibt = 0; ibt < LOOP_UNROLL; ibt++) {
+                out[(obt + ibt) * OC + o] = result[ibt];
             }
         }
     }
