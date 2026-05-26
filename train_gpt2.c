@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <math.h>
 
+#define GELU_SCALING_FACTOR sqrtf(2.0f / M_PI)
+
 typedef struct {
     int max_seq_len; // 入力トークンの最大個数。
     int vocab_size; // 語彙の種類数。
@@ -185,5 +187,18 @@ void residual_forward(float* out, float* inp1, float* inp2, int N) {
     // N: B*T*C
     for (int i = 0; i < N; i++) {
         out[i] = inp1[i] + inp2[i];
+    }
+}
+
+// GeLUを要素単位で適用する非線形活性化関数
+// 役割:自然言語という非線形問題は線形変換を繰り返すだけでは解くことができない
+// そのため、線形変換と非線形変換を組み合わせることで、複雑な関係を近似できる
+// 負の領域で勾配が0になるReLUより、負の領域でも勾配が残るGeLUを採用
+void gelu_forward(float* out, float* inp, int N) {
+    // out, inp: (B, T, C)
+    for (int i = 0; i < N; i++) {
+        float x = inp[i];
+        float cube = 0.044715f * x * x * x;
+        out[i] = 0.5f * x * (1.0f + tanhf(GELU_SCALING_FACTOR * (x + cube)));
     }
 }
