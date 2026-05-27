@@ -244,3 +244,20 @@ void softmax_forward(float* probs, float* logits, int B, int T, int V, int Vp) {
         }
     }
 }
+
+// 各トークンのcross-entropyロスを計算する
+void crossentropy_forward(float* losses, float* probs, int* targets,
+                          int B, int T, int Vp) {
+    // losses: (B, T), 学習する際の損失
+    // probs: (B, T, Vp), 語彙の確率分布
+    // targets: (B, T), 各トークンの正解トークンインデックス
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            float* probs_bt = probs + b * T * Vp + t * Vp;
+            // 正解トークンのインデックスを取り出す
+            int ix = targets[b * T + t];
+            // cross-entropyロス=正解トークンの負の対数確率
+            losses[b * T + t] = -logf(probs_bt[ix]);
+        }
+    }
+}
