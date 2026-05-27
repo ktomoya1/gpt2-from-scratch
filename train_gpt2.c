@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <math.h>
+#include <float.h>
 
 #define GELU_SCALING_FACTOR sqrtf(2.0f / M_PI)
 
@@ -79,47 +80,59 @@ void layernorm_forward(float* out, float* mean, float* rstd,
     }
 }
 
-void attention_forward(float* out, float* inp, int B, int T, int C, int NH) {
+void attention_forward(float* out, float* inp, float* preatt, float* att,
+                       int B, int T, int C, int NH) {
     // out: (B, T, C)
-    // inp: (B, T, 3*C)
+    // inp: (B, T, C*3)
+    // preatt, att: (B, NH, T, T)
+    int C3 = C*3;
     int hs = C / NH;
-    int C3 = 3*C;
     float scale = 1.0f / sqrtf(hs);
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
             for (int h = 0; h < NH; h++) {
-                float att[T];
-                // 1. query_t dot key_t2
+                // 1. query_t dot key_t2 and maxval
                 float* query_t = inp + b * T * C3 + t * C3 + h * hs;
-                for (int t2 = 0; t2 < T; t2++) {
-                    if (t2 <= t) {
-                        att[t2] = 0.0f;
-                        float* key_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C;
-                        for (int i = 0; i < hs; i++) {
-                            att[t2] += query_t[i] * key_t2[i];
-                        }
-                        att[t2] *= scale;
-                    } else {
-                        att[t2] = 0.0f;
+                float* preatt_bth = preatt + b * NH*T*T + h * T*T + t * T;
+                float* att_bth = att + b * NH*T*T + h * T*T + t * T;
+
+                float maxval = -FLT_MAX;
+                for (int t2 = 0; t2 <= t; t2++) {
+                    float* key_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C;
+                    float val = 0.0f;
+                    for (int i = 0; i < hs; i++) {
+                        val += query_t[i] * key_t2[i];
                     }
+                    val *= scale;
+                    if (val > maxval) {
+                        maxval = val;
+                    }
+                    preatt_bth[t2] = val;
                 }
                 // 2. softmax
-                float exp_sum = 0.0f;
+                float expsum = 0.0f;
                 for (int t2 = 0; t2 <= t; t2++) {
-                    exp_sum += expf(att[t2]);
+                    float expv = expf(preatt_bth[t2] - maxval);
+                    expsum += expv;
+                    att_bth[t2] = expv;
                 }
-                float exp_inv = (exp_sum == 0.0f ? 0.0f : 1.0f / exp_sum);
-                for (int t2 = 0; t2 <= t; t2++) {
-                    att[t2] = expf(att[t2]) * exp_inv;
+                float expsum_inv = (expsum == 0.0f) ? 0.0f : 1.0f / expsum;
+                for (int t2 = 0; t2 < T; t2++) {
+                    if (t2 <= t) {
+                        att_bth[t2] *= expsum_inv;
+                    } else {
+                        // PyTorchでデバッグする用のゼロ埋め
+                        att_bth[t2] = 0.0f;
+                    }
                 }
-                // 3. out <- att[t2] * value_t2
+                // 3. out_bth <- attbth_t2 * val_t2
                 float* out_bth = out + b * T * C + t * C + h * hs;
                 for (int i = 0; i < hs; i++) { out_bth[i] = 0.0f; }
                 for (int t2 = 0; t2 <= t; t2++) {
-                    float att_t2 = att[t2];
-                    float* value_t2 = inp + b * T * C3 + t2 * C3 + h * hs + 2*C;
+                    float* val_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C*2;
+                    float attbth_t2 = att_bth[t2];
                     for (int i = 0; i < hs; i++) {
-                        out_bth[i] += att_t2 * value_t2[i];
+                        out_bth[i] += attbth_t2 * val_t2[i];
                     }
                 }
             }
