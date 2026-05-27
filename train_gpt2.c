@@ -217,3 +217,30 @@ void gelu_forward(float* out, float* inp, int N) {
         out[i] = 0.5f * x * (1.0f + tanhf(GELU_SCALING_FACTOR * (x + cube)));
     }
 }
+
+// logitsにsoftmax関数を適用して確率分布を作る
+void softmax_forward(float* probs, float* logits, int B, int T, int V, int Vp) {
+    // probs, logits: (B, T, Vp)
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            float* probs_bt = probs + b * T * Vp + t * Vp;
+            float* logits_bt = logits + b * T * Vp + t * Vp;
+
+            // maxvalの計算
+            float maxval = -FLT_MAX;
+            for (int v = 0; v < V; v++) {
+                if (logits_bt[v] > maxval) maxval = logits_bt[v];
+            }
+            // softmaxの計算
+            float expsum = 0.0f;
+            for (int v = 0; v < V; v++) {
+                probs_bt[v] = expf(logits_bt[v] - maxval);
+                expsum += probs_bt[v];
+            }
+            // [V, Vp)はパディングなのでゼロ埋めする
+            for (int v = 0; v < Vp; v++) {
+                probs_bt[v] = (v < V) ? probs_bt[v] / expsum : 0.0f;
+            }
+        }
+    }
+}
