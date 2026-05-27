@@ -80,11 +80,13 @@ void layernorm_forward(float* out, float* mean, float* rstd,
     }
 }
 
+// 役割：各トークンが他のトークンに対してどれだけ注目するかを求め、
+// 注目度でvalueを加重和することで文脈を含んだ表現に変換する
 void attention_forward(float* out, float* inp, float* preatt, float* att,
                        int B, int T, int C, int NH) {
     // out: (B, T, C)
-    // inp: (B, T, C*3)
-    // preatt, att: (B, NH, T, T)
+    // inp: (B, T, C*3), Q, K, Vを連結。matmul_forwardを1回で済ませるため
+    // preatt, att: (B, NH, T, T), backwardで使用
     int C3 = C*3;
     int hs = C / NH;
     float scale = 1.0f / sqrtf(hs);
@@ -125,7 +127,7 @@ void attention_forward(float* out, float* inp, float* preatt, float* att,
                         att_bth[t2] = 0.0f;
                     }
                 }
-                // 3. out_bth <- attbth_t2 * val_t2
+                // 3. out <- sofmax() * val
                 float* out_bth = out + b * T * C + t * C + h * hs;
                 for (int i = 0; i < hs; i++) { out_bth[i] = 0.0f; }
                 for (int t2 = 0; t2 <= t; t2++) {
