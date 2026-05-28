@@ -30,6 +30,34 @@ typedef struct {
     float* lnfb; // バイアス項(T, C)。
 } ParameterTensors;
 
+typedef struct {
+    // *_mean: 各位置が持つ平均。backwardの勾配計算時に使用
+    // *_rstd: 各位置が持つ逆標準偏差。backwardで使用
+    float* encoded; // (B, T, C), 埋め込みベクトル＋位置ベクトル
+    float* ln1; // (L, B, T, C), トークンの特徴量を平均0, 分散1に正規化することで、どの層でも安定した分布を維持する
+    float* ln1_mean; // (L, B, T)
+    float* ln1_rstd; // (L, B, T)
+    float* qkv; // (L, B, T, C*3), クエリ、キー、バリュー。QKの注目度に応じたVとの加重和を求める。
+    float* preatt; // (L, B, NH, T, T), attention前の各位置の全位置に対する注目度。backwardで使用
+    float* att; // (L, B, NH, T, T), attention後の各位置の全位置に対する注目度。backwardで使用
+    float* atty; // (L, B, T, C), 注目度で重み付けしたvalueの加重和。
+    float* attproj; // (L, B, T, C), 全ヘッドのattentionの出力結果を混ぜたもの。
+    float* residual2; // (L, B, T, C), 残差接続。層が深くなっても勾配消失を起こさないための工夫
+    float* ln2; // (L, B, T, C), FFN前の正規化。
+    float* ln2_mean; // (L, B, T)
+    float* ln2_rstd; // (L, B, T)
+    float* fch; // (L, B, T, C*4), gelu前にベクトルを表現力向上のため一時的に拡張する。
+    float* fch_gelu; // (L, B, T, C*4), 線形層に非線形活性化関数geluを入れることで非線形問題に対応。
+    float* fcproj; // (L, B, T, C), 一時的に拡張したベクトルを元に戻す
+    float* residual3; // (L, B, T, C), 残差接続。
+    float* lnf; // (B, T, C), Transformerブロック通過後の最後の正規化。
+    float* lnf_mean; // (B, T)
+    float* lnf_rstd; // (B, T)
+    float* logits; // (B, T, Vp), softmax関数を適用する前の語彙ごとの値。
+    float* probs; // (B, T, Vp), softmax関数を適用して得た確率分布。
+    float* losses; // (B, T), 次トークンを予測して得られる損失。
+} ActivationTensors;
+
 void encoder_forward(float* out, int* inp, float* wte, float* wpe, int B, int T, int C) {
     // out: (B, T, C)
     // inp: (B, T)
