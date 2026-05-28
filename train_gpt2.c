@@ -13,6 +13,7 @@ typedef struct {
     int channels; // 各トークンのベクトルの要素数。
 } GPT2Config;
 
+#define NUM_PARAMETER_TENSORS 16
 typedef struct {
     float* wte; // 埋め込み行列(V, C)、トークンIDをベクトルに変換する・logits計算前に次元をVに戻す役割を持つ
     float* wpe; // 位置ベクトル(maxT, C)。トークン列を並列で処理するため、順序を持たない。そのため、位置情報を加える。
@@ -30,6 +31,7 @@ typedef struct {
     float* lnfb; // バイアス項(T, C)。
 } ParameterTensors;
 
+#define NUM_ACTIVATION_TENSORS 23
 typedef struct {
     // *_mean: 各位置が持つ平均。backwardの勾配計算時に使用
     // *_rstd: 各位置が持つ逆標準偏差。backwardで使用
@@ -38,9 +40,9 @@ typedef struct {
     float* ln1_mean; // (L, B, T)
     float* ln1_rstd; // (L, B, T)
     float* qkv; // (L, B, T, C*3), クエリ、キー、バリュー。QKの注目度に応じたVとの加重和を求める。
+    float* atty; // (L, B, T, C), 注目度で重み付けしたvalueの加重和。
     float* preatt; // (L, B, NH, T, T), attention前の各位置の全位置に対する注目度。backwardで使用
     float* att; // (L, B, NH, T, T), attention後の各位置の全位置に対する注目度。backwardで使用
-    float* atty; // (L, B, T, C), 注目度で重み付けしたvalueの加重和。
     float* attproj; // (L, B, T, C), 全ヘッドのattentionの出力結果を混ぜたもの。
     float* residual2; // (L, B, T, C), 残差接続。層が深くなっても勾配消失を起こさないための工夫
     float* ln2; // (L, B, T, C), FFN前の正規化。
@@ -57,6 +59,41 @@ typedef struct {
     float* probs; // (B, T, Vp), softmax関数を適用して得た確率分布。
     float* losses; // (B, T), 次トークンを予測して得られる損失。
 } ActivationTensors;
+
+// GPT2モデルを動かすのに必要なフィールドを１箇所にまとめたもの
+typedef struct {
+    // GPT2モデルの定義
+    GPT2Config config;
+
+    // パラメータ（学習で更新される重み）
+    ParameterTensors params; // 各パラメータ配列へのポインタ集
+    size_t param_sizes[NUM_PARAMETER_TENSORS]; // 各パラメータ配列の要素数
+    float* params_memory; // パラメータのデータ配列
+    size_t num_parameters; // params_memoryに確保されたfloatの総数
+
+    // forwardの中間結果
+    ActivationTensors acts; // 各中間結果配列へのポインタ集
+    size_t act_sizes[NUM_ACTIVATION_TENSORS]; // 各中間結果配列の要素数
+    float* acts_memory; // 中間結果のデータ配列
+    size_t num_activations; // acts_memoryに確保されたfloatの総数
+
+    // backwardの勾配
+    ParameterTensors grads; // 勾配配列（パラメータ）へのポインタ集
+    float* grads_memory; // 勾配（パラメータ）のデータ配列
+    ActivationTensors grads_acts; // 勾配配列（中間結果）へのポインタ集
+    float* grads_acts_memory; // 勾配（中間結果）のデータ配列
+
+    // optimizerの状態
+    float* m_memory; // 一次モーメントのデータ
+    float* v_memory; // 二次モーメントのデータ
+
+    // 実行時の入出力管理
+    int* inputs; // 現在トークンIDの配列
+    int* targets; // 次トークンIDの配列
+    float mean_loss; // １バッチの平均損失。backwardの起点になる
+    int batch_size; // 現在のforwardで処理するバッチサイズ（acts再確保の判断に使用）
+    int seq_len; // 現在のforwardで処理するトークン数（acts再確保の判断に使用）
+} GPT2;
 
 void encoder_forward(float* out, int* inp, float* wte, float* wpe, int B, int T, int C) {
     // out: (B, T, C)
