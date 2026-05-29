@@ -23,6 +23,8 @@ typedef struct {
     float* qkvb; // バイアス項(T, 3*C)。
     float* attprojw; // h個のAttentionの出力を連結したものを重みづけする役割を持つ。(T, C)
     float* attprojb; // バイアス項(T, C)
+    float* ln2w; // 二層目の正規化(T, C)
+    float* ln2b; // バイアス項(T, C)。
     float* fcw; // FFN層の重み行列(T, 4*C)。次元を４倍に拡張し、表現力をあげる。
     float* fcb; // バイアス項(T, 4*C)
     float* fcprojw; // GeLU関数後に次元を元に戻す重み行列(T, C)。
@@ -325,4 +327,29 @@ void crossentropy_forward(float* losses, float* probs, int* targets,
             losses[b * T + t] = -logf(probs_bt[ix]);
         }
     }
+}
+
+// 各パラメータが占めるfloat個数を入力する
+void fill_in_parameter_sizes(size_t* param_sizes, GPT2Config config) {
+    size_t Vp = config.padded_vocab_size;
+    size_t maxT = config.max_seq_len;
+    size_t L = config.num_layers;
+    size_t C = config.channels;
+
+    param_sizes[0] = Vp * C; // wte
+    param_sizes[1] = maxT * C; // wpe
+    param_sizes[2] = L * C; // ln1w
+    param_sizes[3] = L * C; // ln1b
+    param_sizes[4] = L * C*3 * C; // qkvw
+    param_sizes[5] = L * C*3; // qkvb
+    param_sizes[6] = L * C * C; // attprojw
+    param_sizes[7] = L * C; // attprojb
+    param_sizes[8] = L * C; // ln2w
+    param_sizes[9] = L * C; // ln2b
+    param_sizes[10] = L * C*4 * C; // fcw
+    param_sizes[11] = L * C*4; // fcb
+    param_sizes[12] = L * C * C*4; // fcprojw
+    param_sizes[13] = L * C; // fcprojb
+    param_sizes[14] = C; // lnfw
+    param_sizes[15] = C; // lnfb
 }
