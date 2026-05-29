@@ -45,7 +45,7 @@ typedef struct {
     float* atty; // (L, B, T, C), 注目度で重み付けしたvalueの加重和。
     float* preatt; // (L, B, NH, T, T), attention前の各位置の全位置に対する注目度。backwardで使用
     float* att; // (L, B, NH, T, T), attention後の各位置の全位置に対する注目度。backwardで使用
-    float* attproj; // (L, B, T, C), 全ヘッドのattentionの出力結果を混ぜたもの。
+    float* attproj; // (L, B, T, C), 全ヘッドのattention出力を線形射影したもの。
     float* residual2; // (L, B, T, C), 残差接続。層が深くなっても勾配消失を起こさないための工夫
     float* ln2; // (L, B, T, C), FFN前の正規化。
     float* ln2_mean; // (L, B, T)
@@ -352,4 +352,36 @@ void fill_in_parameter_sizes(size_t* param_sizes, GPT2Config config) {
     param_sizes[13] = L * C; // fcprojb
     param_sizes[14] = C; // lnfw
     param_sizes[15] = C; // lnfb
+}
+
+// 各中間結果が占めるfloat個数をact_sizesに書き込む
+void fill_in_activation_sizes(size_t* act_sizes, GPT2Config config, int B, int T) {
+    size_t Vp = config.padded_vocab_size;
+    size_t L = config.num_layers;
+    size_t NH = config.num_heads;
+    size_t C = config.channels;
+
+    act_sizes[0] = B * T * C; // encoded
+    act_sizes[1] = L * B * T * C; // ln1
+    act_sizes[2] = L * B * T; // ln1_mean
+    act_sizes[3] = L * B * T; // ln1_rstd
+    act_sizes[4] = L * B * T * 3*C; // qkv
+    act_sizes[5] = L * B * T * C; // atty
+    act_sizes[6] = L * B * NH * T * T; // preatt
+    act_sizes[7] = L * B * NH * T * T; // att
+    act_sizes[8] = L * B * T * C; // attproj
+    act_sizes[9] = L * B * T * C; // residual2
+    act_sizes[10] = L * B * T * C; // ln2
+    act_sizes[11] = L * B * T; // ln2_mean
+    act_sizes[12] = L * B * T; // ln2_rstd
+    act_sizes[13] = L * B * T * 4*C; // fch
+    act_sizes[14] = L * B * T * 4*C; // fch_gelu
+    act_sizes[15] = L * B * T * C; // fcproj
+    act_sizes[16] = L * B * T * C; // residual3
+    act_sizes[17] = B * T * C; // lnf
+    act_sizes[18] = B * T; // lnf_mean
+    act_sizes[19] = B * T; // lnf_rstd
+    act_sizes[20] = B * T * Vp; // logits
+    act_sizes[21] = B * T * Vp; // probs
+    act_sizes[22] = B * T; // losses
 }
