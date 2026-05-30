@@ -413,3 +413,28 @@ float* malloc_and_point_parameters(ParameterTensors* params, size_t* param_sizes
     }
     return params_memory;
 }
+
+// acts_memoryのメモリ確保＋ActivationTensorsのフィールドポインタを割り当てる
+float* malloc_and_point_activations(ActivationTensors* acts, size_t* act_sizes) {
+    size_t num_activations = 0;
+    for (size_t i = 0; i < NUM_ACTIVATION_TENSORS; i++) {
+        num_activations += act_sizes[i];
+    }
+
+    float* acts_memory = (float*)mallocCheck(num_activations * sizeof(float));
+    
+    float** ptrs[] = {
+        &acts->encoded, &acts->ln1, &acts->ln1_mean, &acts->ln1_rstd, &acts->qkv,
+        &acts->atty, &acts->preatt, &acts->att, &acts->attproj, &acts->residual2,
+        &acts->ln2, &acts->ln2_mean, &acts->ln2_rstd, &acts->fch, &acts->fch_gelu,
+        &acts->fcproj, &acts->residual3, &acts->lnf, &acts->lnf_mean, &acts->lnf_rstd,
+        &acts->logits, &acts->probs, &acts->losses
+    };
+    float* acts_memory_iterator = acts_memory;
+    for (size_t i = 0; i < NUM_ACTIVATION_TENSORS; i++) {
+        *(ptrs[i]) = acts_memory_iterator;
+        acts_memory_iterator += act_sizes[i];
+    }
+
+    return acts_memory;
+}
