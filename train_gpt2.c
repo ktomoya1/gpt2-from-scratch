@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
 #include <float.h>
 
@@ -384,4 +385,31 @@ void fill_in_activation_sizes(size_t* act_sizes, GPT2Config config, int B, int T
     act_sizes[20] = B * T * Vp; // logits
     act_sizes[21] = B * T * Vp; // probs
     act_sizes[22] = B * T; // losses
+}
+
+// params_memoryのメモリ確保＋ParameterTensorsのフィールドポインタを割り当てる
+float* malloc_and_point_parameters(ParameterTensors* params, size_t* param_sizes) {
+    // floatの総要素数算出
+    size_t num_parameters = 0;
+    for (size_t i = 0; i < NUM_PARAMETER_TENSORS; i++) {
+        num_parameters += param_sizes[i];
+    }
+    
+    // 連続メモリとして一括確保することでキャッシュ効率を確保する
+    float* params_memory = (float*)mallocCheck(num_parameters * sizeof(float));
+
+    float** ptrs[] = {
+        &params->wte, &params->wpe, &params->ln1w, &params->ln1b, &params->qkvw, &params->qkvb,
+        &params->attprojw, &params->attprojb, &params->ln2w, &params->ln2b, &params->fcw,
+        &params->fcb, &params->fcprojw, &params->fcprojb, &params->lnfw, &params->lnfb
+    };
+
+    float* params_memory_iterator = params_memory;
+    // params_memoryをparam_sizes[i]ずつ区切って、各フィールドに対応する先頭アドレスを割り当てる
+    for (size_t i = 0; i < NUM_PARAMETER_TENSORS; i++) {
+        // *(ptrs[i]) = iterator で各フィールドのポインタ値を書き換える
+        *(ptrs[i]) = params_memory_iterator;
+        params_memory_iterator += param_sizes[i];
+    }
+    return params_memory;
 }
