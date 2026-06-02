@@ -1,7 +1,9 @@
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <math.h>
 #include <float.h>
+#include <assert.h>
 
 #define GELU_SCALING_FACTOR sqrtf(2.0f / M_PI)
 
@@ -150,8 +152,8 @@ void layernorm_forward(float* out, float* mean, float* rstd,
 
 // 役割：各トークンが他のトークンに対してどれだけ注目するかを求め、
 // 注目度でvalueを加重和することで文脈を含んだ表現に変換する
-void attention_forward(float* out, float* inp, float* preatt, float* att,
-                       int B, int T, int C, int NH) {
+void attention_forward(float* out, float* preatt, float* att,
+                       float* inp, int B, int T, int C, int NH) {
     // out: (B, T, C)
     // inp: (B, T, C*3), Q, K, Vを連結。matmul_forwardを1回で済ませるため
     // preatt, att: (B, NH, T, T), backwardで使用
@@ -437,4 +439,128 @@ float* malloc_and_point_activations(ActivationTensors* acts, size_t* act_sizes) 
     }
 
     return acts_memory;
+}
+
+// model->actsのmalloc＋フォワードの処理＋いくつかの変数をbackward用にキャッシュ
+void gpt2_forward(GPT2* model, int* inputs, int* targets, size_t B, size_t T) {
+    // 推論時にはtargetsがNULLになる
+    // params_memoryはgpt2_build_from_checkpointで設定される
+    // NULLなら未初期化なのでエラー終了
+    if (model->params_memory == NULL) {
+        printf("Error1");
+        exit(1);
+    }
+
+    // 便利変数展開
+    size_t V = model->config.vocab_size;
+    size_t Vp = model->config.padded_vocab_size;
+    size_t L = model->config.num_layers;
+    size_t NH = model->config.num_heads;
+    size_t C = model->config.channels;
+
+    // トークンIDが[0, V)範囲内かチェック
+    for (size_t i = 0; i < B * T; i++) {
+        assert(0 <= inputs[i] && inputs[i] < V);
+        if (targets != NULL) {
+            assert(0 <= targets[i] && targets[i] < V);
+        }
+    }
+
+    // actsメモリを初回のみ確保
+    if (model->acts_memory == NULL) {
+        model->batch_size = B;
+        model->seq_len = T;
+
+        fill_in_activation_sizes(model->act_sizes, model->config, (int)B, (int)T);
+        size_t num_activations = 0;
+        for (size_t i = 0; i < NUM_ACTIVATION_TENSORS; i++) { num_activations += model->act_sizes[i]; }
+        model->num_activations = num_activations;
+        model->acts_memory = malloc_and_point_activations(&model->acts, model->act_sizes);
+
+        model->inputs = (int*)mallocCheck(B * T * sizeof(int));
+        model->targets = (int*)mallocCheck(B * T * sizeof(int));
+    } else {
+        if (B != model->batch_size || T != model->seq_len) {
+            printf("Error2");
+            exit(1);
+        }
+    }
+
+    // backward用のキャッシュ
+    memcpy(model->inputs, inputs, B * T * sizeof(int));
+    if (targets != NULL) {
+        memcpy(model->targets, targets, B * T * sizeof(int));
+    }
+
+    // フォワード処理
+    ParameterTensors params = model->params;
+    ActivationTensors acts = model->acts;
+    float *residual;
+
+    encoder_forward(acts.encoded, inputs, params.wte, params.wpe, B, T, C);
+    for (int l = 0; l < L; l++) {
+        residual = (l == 0) ? acts.encoded : acts.residual3 + (l - 1) * B * T * C;
+
+        // l番目のレイヤの重み・アクティベーションポインタをオフセットで取り出す
+        float* l_ln1w = params.ln1w + l * C;
+        float* l_ln1b = params.ln1b + l * C;
+        float* l_qkvw = params.qkvw + l * 3*C * C;
+        float* l_qkvb = params.qkvb + l * 3*C;
+        float* l_attprojw = params.attprojw + l * C * C;
+        float* l_attprojb = params.attprojb + l * C;
+        float* l_ln2w = params.ln2w + l * C;
+        float* l_ln2b = params.ln2b + l * C;
+        float* l_fcw = params.fcw + l * 4*C * C;
+        float* l_fcb = params.fcb + l * 4*C;
+        float* l_fcprojw = params.fcprojw + l * C * 4*C;
+        float* l_fcprojb = params.fcprojb + l * C;
+
+        float* l_ln1 = acts.ln1 + l * B * T * C;
+        float* l_ln1_mean = acts.ln1_mean + l * B * T;
+        float* l_ln1_rstd = acts.ln1_rstd + l * B * T;
+        float* l_qkv = acts.qkv + l * B * T * 3*C;
+        float* l_atty = acts.atty + l * B * T * C;
+        float* l_preatt = acts.preatt + l * B * NH * T * T;
+        float* l_att = acts.att + l * B * NH * T * T;
+        float* l_attproj = acts.attproj + l * B * T * C;
+        float* l_residual2 = acts.residual2 + l * B * T * C;
+        float* l_ln2 = acts.ln2 + l * B * T * C;
+        float* l_ln2_mean = acts.ln2_mean + l * B * T;
+        float* l_ln2_rstd = acts.ln2_rstd + l * B * T;
+        float* l_fch = acts.fch + l * B * T * 4*C;
+        float* l_fch_gelu = acts.fch_gelu + l * B * T * 4*C;
+        float* l_fcproj = acts.fcproj + l * B * T * C;
+        float* l_residual3 = acts.residual3 + l * B * T * C;
+
+        layernorm_forward(l_ln1, l_ln1_mean, l_ln1_rstd, residual, l_ln1w, l_ln1b, B, T, C);
+        matmul_forward(l_qkv, l_ln1, l_qkvw, l_qkvb, B, T, C, 3*C);
+        attention_forward(l_atty, l_preatt, l_att, l_qkv, B, T, C, NH);
+        matmul_forward(l_attproj, l_atty, l_attprojw, l_attprojb, B, T, C, C);
+        residual_forward(l_residual2, residual, l_attproj, B * T * C);
+        layernorm_forward(l_ln2, l_ln2_mean, l_ln2_rstd, l_residual2, l_ln2w, l_ln2b, B, T, C);
+        matmul_forward(l_fch, l_ln2, l_fcw, l_fcb, B, T, C, 4*C);
+        gelu_forward(l_fch_gelu, l_fch, B * T * 4*C);
+        matmul_forward(l_fcproj, l_fch_gelu, l_fcprojw, l_fcprojb, B, T, 4*C, C);
+        residual_forward(l_residual3, l_residual2, l_fcproj, B * T * C);
+    }
+
+    // 最終レイヤの出力に対して最終LN->logits->softmaxを適用
+    residual = acts.residual3 + (L - 1) * B * T * C;
+    layernorm_forward(acts.lnf, acts.lnf_mean, acts.lnf_rstd, residual, params.lnfw, params.lnfb, B, T, C);
+    matmul_forward(acts.logits, acts.lnf, params.wte, NULL, B, T, C, Vp);
+    softmax_forward(acts.probs, acts.logits, B, T, V, Vp);
+
+    // mean_lossの計算。学習進捗の確認用に使用
+    if (targets != NULL) {
+        crossentropy_forward(acts.losses, acts.probs, targets, B, T, Vp);
+        float mean_loss = 0.0f;
+        for (size_t i = 0; i < B * T; i++) {
+            mean_loss += acts.losses[i];
+        }
+        mean_loss /= B * T;
+        model->mean_loss = mean_loss;
+    } else {
+        // 推論時はmean_lossは使用しない
+        model->mean_loss = -1.0f;
+    }
 }
