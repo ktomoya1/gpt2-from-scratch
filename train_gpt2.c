@@ -564,3 +564,15 @@ void gpt2_forward(GPT2* model, int* inputs, int* targets, size_t B, size_t T) {
         model->mean_loss = -1.0f;
     }
 }
+
+// grads_memoryとgrads_acts_memoryのゼロクリア。
+// backwardで勾配を累積するため、前ステップの値が残ると誤った勾配になる。
+// 両メモリはgpt2_backward内で遅延確保されるため、NULLチェックしてからクリアする。
+void gpt2_zero_grad(GPT2* model) {
+    if (model->grads_memory != NULL) {
+        memset(model->grads_memory, 0, model->num_parameters * sizeof(float));
+    }
+    if (model->grads_acts_memory != NULL) {
+        memset(model->grads_acts_memory, 0, model->num_activations * sizeof(float));
+    }
+}
