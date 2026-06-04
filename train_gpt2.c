@@ -597,3 +597,13 @@ void crossentropy_softmax_backward(float* dlogits, float* dlosses, float* probs,
         }
     }
 }
+
+// 上流から流れてきた勾配をinp1, inp2に加算する
+// ∂E/∂inp = ∂E/∂out・∂out/∂inp = dout・1 = dout
+void residual_backward(float* dinp1, float* dinp2, float* dout, int N) {
+    for (int i = 0; i < N; i++) {
+        // 複数経路から勾配が流れ込む可能性があるため、加算で蓄積する
+        dinp1[i] += dout[i];
+        dinp2[i] += dout[i];
+    }
+}
