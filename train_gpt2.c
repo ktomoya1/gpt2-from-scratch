@@ -576,3 +576,24 @@ void gpt2_zero_grad(GPT2* model) {
         memset(model->grads_acts_memory, 0, model->num_activations * sizeof(float));
     }
 }
+
+// softmax+cross-entropyの合成関数に対し、logitsの勾配∂E/∂ziを計算する
+// ∂E/∂zi = (pi - 1[i == ix])/(B・T)
+void crossentropy_softmax_backward(float* dlogits, float* dlosses, float* probs, int* targets,
+                                   int B, int T, int V, int Vp) {
+    // dlogits, probs: (B, T, Vp)
+    // dlosses, targets: (B, T)
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            float* probs_bt = probs + b * T * Vp + t * Vp;
+            float* dlogits_bt = dlogits + b * T * Vp + t * Vp;
+            // 上流勾配1/(B・T)
+            float dloss = dlosses[b * T + t];
+            int ix = targets[b * T + t];
+            for (int v = 0; v < V; v++) {
+                float indicator = (v == ix) ? 1.0f : 0.0f;
+                dlogits_bt[v] += dloss * (probs_bt[v] - indicator);
+            }
+        }
+    }
+}
