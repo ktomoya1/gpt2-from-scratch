@@ -288,6 +288,22 @@ void gelu_forward(float* out, float* inp, int N) {
     }
 }
 
+// dL/dxを求め、dinpに累積加算する
+// -Ofast下では1 - tanh^2(s)の形で数値精度が損なわれる可能性があるため、1/cosh^2(s)で代替
+void gelu_backward(float* dinp, float* inp, float* dout, int N) {
+    for (int i = 0; i < N; i++) {
+        float x = inp[i];
+        float cube = 0.044715f * x * x * x;         // 0.044715x^3: tanhの引数に使う３乗項
+        float tanh_arg = GELU_SCALING_FACTOR * (x + cube); // s = √(2/π)(x + 0.044715x^3)
+        float tanh_out = tanhf(tanh_arg);           // t = tanh(s)
+        float coshf_out = coshf(tanh_arg);          // cosh(s): sech^2の計算に使う中間値
+        float sech_out = 1.0f / (coshf_out * coshf_out); // sech^2(s) = 1 - tanh^2(s)の数値安定版
+        float local_grad = 0.5f * (1.0f + tanh_out) // dGeLU/dx: 第1項 0.5(1 + t)
+            + 0.5f * x * sech_out * GELU_SCALING_FACTOR * (1.0f + 3.0f * 0.044715 * x * x); // 第2項 0.5x * sech^2(s) * s'
+        dinp[i] += local_grad * dout[i];            // dL/dx = dy/dx * dL/dy
+    }
+}
+
 // logitsにsoftmax関数を適用して確率分布を作る
 void softmax_forward(float* probs, float* logits, int B, int T, int V, int Vp) {
     // probs, logits: (B, T, Vp)
@@ -607,3 +623,4 @@ void residual_backward(float* dinp1, float* dinp2, float* dout, int N) {
         dinp2[i] += dout[i];
     }
 }
+
