@@ -265,6 +265,48 @@ void matmul_forward(float* out, const float* inp,
     }
 }
 
+// 上流からの勾配を受け取り、各パラメータへの勾配を計算して加算する
+void matmul_backward(float* dinp, float* dweight, float* dbias,
+                     const float* dout, const float* inp, const float* weight,
+                     int B, int T, int C, int OC) {
+    // dinp, inp: (B, T, C)
+    // dweight, weight: (OC, C)
+    // dbias, bias: (OC)
+    // dout: (B, T, OC)
+
+    // 1ループで書けるが、dinpは(b, t)軸、dweight/dbiasはo軸で並列化するため2ループに分割
+    // dinp[b,t,c] += Σo{dout[b,t,o] * weight[o,c]}
+    // dinpは(b, t)ごとに独立したメモリに書き込むため競合しない
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            float* dinp_bt = dinp + b * T * C + t * C;
+            for (int o = 0; o < OC; o++) {
+                const float dout_bto = dout[b * T * OC + t * OC + o];
+                for (int c = 0; c < C; c++) {
+                    dinp_bt[c] += dout_bto * weight[o * C + c];
+                }
+            }
+        }
+    }
+
+    // dweight[o,c] += Σb,t{dout[b,t,o] * inp[b,t,c]}
+    // dbias[o] += Σb,t{dout[b,t,o]}
+    // dweight/dbiasはoごとに独立したメモリに書き込むため競合しない
+    for (int o = 0; o < OC; o++) {
+        for (int b = 0; b < B; b++) {
+            for (int t = 0; t < T; t++) {
+                const float dout_bto = dout[b * T * OC + t * OC + o];
+                const float* inp_bt = inp + b * T * C + t * C;
+                if (dbias != NULL) { dbias[o] += dout_bto; } // biasが存在しない層がある(最終matmul_forward)
+                for (int c = 0; c < C; c++) {
+                    dweight[o * C + c] += dout_bto * inp_bt[c];
+                }
+            }
+        }
+    }
+}
+
+
 // 役割：ニューラルネットワークの層が深くなると勾配が消失する問題->近道を作ることで緩和する
 void residual_forward(float* out, float* inp1, float* inp2, int N) {
     // out, inp1, inp2: (B, T, C)
