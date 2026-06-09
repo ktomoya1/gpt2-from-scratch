@@ -212,6 +212,73 @@ void attention_forward(float* out, float* preatt, float* att,
     }
 }
 
+// dinp, dpreatt, dattの勾配を計算し、加算する
+void attention_backward(float* dinp, float* dpreatt, float* datt,
+                        float* dout, float* inp, float* att,
+                        int B, int T, int C, int NH) {
+    // dinp, inp: (B, T, 3*C)
+    // dpreatt, datt, att: (B, NH, T, T)
+    // dout: (B, T, C)
+    int C3 = 3 * C;
+    int hs = C / NH;
+    float scale = 1.0f / sqrtf(hs);
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            for (int h = 0; h < NH; h++) {
+                float* dout_bth = dout + b * T * C + t * C + h * hs;
+                float* datt_bth = datt + b * NH*T*T + h * T*T + t * T;
+                float* att_bth = att + b * NH*T*T + h * T*T + t * T;
+                float* dpreatt_bth = dpreatt + b * NH*T*T + h * T*T + t * T;
+                float* dquery_t = dinp + b * T * C3 + t * C3 + h * hs;
+                float* query_t = inp + b * T * C3 + t * C3 + h * hs;
+
+                // pass 4: datt, dval
+                for (int t2 = 0; t2 <= t; t2++) {
+                    float* val_t2 = inp + b * T * C3 + t2 * C3 + h * hs + 2*C;
+                    float* dval_t2 = dinp + b * T * C3 + t2 * C3 + h * hs + 2*C;
+                    float att_t2 = att_bth[t2];
+                    for (int i = 0; i < hs; i++) {
+                        // forwardの式: out[t,i] = Σ_t2(att[t,t2] * val[t2,i])
+                        // backward式: datt[t,t2] += dout[t,i]*val[t2,i],
+                        //               dval[t2,i] += dout[t,i]*att[t,t2]
+                        datt_bth[t2] += dout_bth[i] * val_t2[i];
+                        dval_t2[i] += dout_bth[i] * att_t2;
+                    }
+                }
+
+                // pass 3->2: dpreatt (softmaxの逆伝播)
+                // forwardの式: att[t,t2] = e^(preatt[t,t2]) / Σ_t3(e^preatt[t, t3])
+                // dpreatt[t2] = Σ_i datt[i] * att[i] * (δ_ij - att[j])
+                //             = datt[j]*att[j] - att[j] * Σ_i(datt[i]*att[i])
+                //             = att[j] * (datt[j] - sum)
+                // backward式: dpreatt[t2] += att[t2] * (datt[t2] - Σ_t3(att[t3] * datt[t3]))
+                // Σ_t3(att[t3] * datt[t3])をsumとして先に計算する
+                float sum = 0.0f;
+                for (int t3 = 0; t3 <= t; t3++) {
+                    sum += datt_bth[t3] * att_bth[t3];
+                }
+                for (int t2 = 0; t2 <= t; t2++) {
+                    dpreatt_bth[t2] += att_bth[t2] * (datt_bth[t2] - sum);
+                }
+
+                // pass 1: dquery, dkey
+                for (int t2 = 0; t2 <= t; t2++) {
+                    float* dkey_t2 = dinp + b * T * C3 + t2 * C3 + h * hs + C;
+                    float* key_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C;
+                    float dpreatt_t2_val = dpreatt_bth[t2];
+                    for (int i = 0; i < hs; i++) {
+                        // forwardの式: preatt[t,t2] = Σ_i(query[t,i] * key[t2, i])/√hs
+                        // backward式: dquery[i] += key[t2,i]*dpreatt[t2] / √hs
+                        //             dkey[t2,i] += query[t,i]*dpreatt[t2] / √hs
+                        dquery_t[i] += key_t2[i] * dpreatt_t2_val * scale;
+                        dkey_t2[i] += query_t[i] * dpreatt_t2_val * scale;
+                    }
+                }
+            }
+        }
+    }
+}
+
 void matmul_forward_naive(float* out, const float* inp,
                             const float* weight, const float* bias,
                             int B, int T, int C, int OC) {
