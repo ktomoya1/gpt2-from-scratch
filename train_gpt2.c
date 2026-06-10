@@ -150,6 +150,53 @@ void layernorm_forward(float* out, float* mean, float* rstd,
     }
 }
 
+// dinp, dweight, dbiasの勾配を計算し、加算する
+void layernorm_backward(float* dinp, float* dweight, float* dbias,
+                        float* dout, float* inp, float* weight, float* mean, float* rstd,
+                        int B, int T, int C) {
+    // dinp, dout, inp: (B, T, C)
+    // dweight, weight, dbias: (C)
+    // mean, rstd: (B, T)
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            float* dinp_bt = dinp + b * T * C + t * C;
+            float* dout_bt = dout + b * T * C + t * C;
+            float* inp_bt = inp + b * T * C + t * C;
+            float mean_bt = mean[b * T + t];
+            float rstd_bt = rstd[b * T + t];
+
+            // norm_i = (xi - μ) * s -> norm[i]
+            // s = 1/√(Var+ε) -> rstd_bt
+            // dnorm_i = ∂L/∂yi * γi
+            // dnorm_mean = 1/C * Σ_j(∂L/∂yj * γj)
+            // dnorm_norm_mean = 1/C * Σ_j(∂L/∂yj * γj * norm_j)
+            // dinp[i]の計算にはdnorm_mean, dnorm_norm_meanが必要
+            // ->全チャネルにわたる平均値のため、dinp[i]の計算前に確定させておく
+            float norm[C], dnorm[C];
+            float dnorm_mean = 0.0f, dnorm_norm_mean = 0.0f;
+            for (int i = 0; i < C; i++) {
+                norm[i] = (inp_bt[i] - mean_bt) * rstd_bt;
+                dnorm[i] = weight[i] * dout_bt[i];
+
+                dnorm_mean += dnorm[i];
+                dnorm_norm_mean += dnorm[i] * norm[i];
+            }
+            dnorm_mean /= C;
+            dnorm_norm_mean /= C;
+
+            for (int i = 0; i < C; i++) {
+                // ∂L/∂βi = ∂L/∂yi
+                dbias[i] += dout_bt[i];
+                // ∂L/∂γi = ∂L/∂yi * norm_i
+                dweight[i] += norm[i] * dout_bt[i];
+                //∂L/∂xi = s*(∂L/∂yi*γi - 1/C*Σ_j(∂L/∂yj*γj) - norm_i * 1/C*Σ_j(∂L/∂yj*γj*norm_j))
+                //       = s*(dnorm_i - dnorm_mean - norm_i*dnorm_norm_mean)
+                dinp_bt[i] += rstd_bt * (dnorm[i] - dnorm_mean - norm[i] * dnorm_norm_mean);
+            }
+        }
+    }
+}
+
 // 役割：各トークンが他のトークンに対してどれだけ注目するかを求め、
 // 注目度でvalueを加重和することで文脈を含んだ表現に変換する
 void attention_forward(float* out, float* preatt, float* att,
@@ -732,4 +779,3 @@ void residual_backward(float* dinp1, float* dinp2, float* dout, int N) {
         dinp2[i] += dout[i];
     }
 }
-
