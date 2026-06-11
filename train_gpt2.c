@@ -118,6 +118,32 @@ void encoder_forward(float* out, int* inp, float* wte, float* wpe, int B, int T,
     }
 }
 
+// dwte, dwpeの勾配を計算し、加算する
+void encoder_backward(float* dwte, float* dwpe, float* dout, int* inp,
+                      int B, int T, int C) {
+    // dwte: (V, C)
+    // dwpe: (maxT, C)
+    // dout: (B, T, C)
+    // inp: (B, T)
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            int ix = inp[b * T + t]; // 位置(b,t)のトークンID
+            float* dwte_ix = dwte + ix * C;
+            float* dwpe_t = dwpe + t * C;
+            float* dout_bt = dout + b * T * C + t * C;
+
+            // 同一トークンが複数位置に出現したら勾配を蓄積する
+            // forward式: out[b,t,i] = wte[ix,i] + wpe[t,i];
+            // backward式: dwte[ix,i] = Σ_inp[b,t]=ix(dout[b,t,i])
+            //             dwpe[t,i] = Σ_b(dout[b,t,i])
+            for (int i = 0; i < C; i++) {
+                dwte_ix[i] += dout_bt[i];
+                dwpe_t[i] += dout_bt[i];
+            }
+        }
+    }
+}
+
 void layernorm_forward(float* out, float* mean, float* rstd,
                         float* inp, float* weight, float* bias,
                          int B, int T, int C) {
