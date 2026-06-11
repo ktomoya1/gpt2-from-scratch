@@ -457,6 +457,16 @@ void residual_forward(float* out, float* inp1, float* inp2, int N) {
     }
 }
 
+// 上流から流れてきた勾配をinp1, inp2に加算する
+// ∂E/∂inp = ∂E/∂out・∂out/∂inp = dout・1 = dout
+void residual_backward(float* dinp1, float* dinp2, float* dout, int N) {
+    for (int i = 0; i < N; i++) {
+        // 複数経路から勾配が流れ込む可能性があるため、加算で蓄積する
+        dinp1[i] += dout[i];
+        dinp2[i] += dout[i];
+    }
+}
+
 // GeLUを要素単位で適用する非線形活性化関数
 // 役割:自然言語という非線形問題は線形変換を繰り返すだけでは解くことができない
 // そのため、線形変換と非線形変換を組み合わせることで、複雑な関係を近似できる
@@ -526,6 +536,27 @@ void crossentropy_forward(float* losses, float* probs, int* targets,
             int ix = targets[b * T + t];
             // cross-entropyロス=正解トークンの負の対数確率
             losses[b * T + t] = -logf(probs_bt[ix]);
+        }
+    }
+}
+
+// softmax+cross-entropyの合成関数に対し、logitsの勾配∂E/∂ziを計算する
+// ∂E/∂zi = (pi - 1[i == ix])/(B・T)
+void crossentropy_softmax_backward(float* dlogits, float* dlosses, float* probs, int* targets,
+                                   int B, int T, int V, int Vp) {
+    // dlogits, probs: (B, T, Vp)
+    // dlosses, targets: (B, T)
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            float* probs_bt = probs + b * T * Vp + t * Vp;
+            float* dlogits_bt = dlogits + b * T * Vp + t * Vp;
+            // 上流勾配1/(B・T)
+            float dloss = dlosses[b * T + t];
+            int ix = targets[b * T + t];
+            for (int v = 0; v < V; v++) {
+                float indicator = (v == ix) ? 1.0f : 0.0f;
+                dlogits_bt[v] += dloss * (probs_bt[v] - indicator);
+            }
         }
     }
 }
@@ -775,33 +806,3 @@ void gpt2_zero_grad(GPT2* model) {
     }
 }
 
-// softmax+cross-entropyの合成関数に対し、logitsの勾配∂E/∂ziを計算する
-// ∂E/∂zi = (pi - 1[i == ix])/(B・T)
-void crossentropy_softmax_backward(float* dlogits, float* dlosses, float* probs, int* targets,
-                                   int B, int T, int V, int Vp) {
-    // dlogits, probs: (B, T, Vp)
-    // dlosses, targets: (B, T)
-    for (int b = 0; b < B; b++) {
-        for (int t = 0; t < T; t++) {
-            float* probs_bt = probs + b * T * Vp + t * Vp;
-            float* dlogits_bt = dlogits + b * T * Vp + t * Vp;
-            // 上流勾配1/(B・T)
-            float dloss = dlosses[b * T + t];
-            int ix = targets[b * T + t];
-            for (int v = 0; v < V; v++) {
-                float indicator = (v == ix) ? 1.0f : 0.0f;
-                dlogits_bt[v] += dloss * (probs_bt[v] - indicator);
-            }
-        }
-    }
-}
-
-// 上流から流れてきた勾配をinp1, inp2に加算する
-// ∂E/∂inp = ∂E/∂out・∂out/∂inp = dout・1 = dout
-void residual_backward(float* dinp1, float* dinp2, float* dout, int N) {
-    for (int i = 0; i < N; i++) {
-        // 複数経路から勾配が流れ込む可能性があるため、加算で蓄積する
-        dinp1[i] += dout[i];
-        dinp2[i] += dout[i];
-    }
-}
