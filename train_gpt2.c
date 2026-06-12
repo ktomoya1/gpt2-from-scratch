@@ -806,3 +806,110 @@ void gpt2_zero_grad(GPT2* model) {
     }
 }
 
+// forwardの逆順で各backward関数を呼び出し、gradsに勾配を蓄積する
+void gpt2_backward(GPT2* model) {
+    if (model->mean_loss == -1.0f) {
+        printf("Error: must forward with targets before backward\n");
+        exit(1);
+    }
+
+    // 初回のみmallocしてゼロ初期化
+    // ゼロ初期化のタイミングはmain側に委ねるため2回目以降は行わない
+    if (model->grads_memory == NULL) {
+        model->grads_memory = malloc_and_point_parameters(&model->grads, model->param_sizes);
+        model->grads_acts_memory = malloc_and_point_activations(&model->grads_acts, model->act_sizes);
+        gpt2_zero_grad(model);
+    }
+
+    // 便利変数の展開
+    size_t V = model->config.vocab_size;
+    size_t Vp = model->config.padded_vocab_size;
+    size_t L = model->config.num_layers;
+    size_t NH = model->config.num_heads;
+    size_t B = model->batch_size;
+    size_t T = model->seq_len;
+    size_t C = model->config.channels;
+
+    ParameterTensors params = model->params;
+    ParameterTensors grads = model->grads;
+    ActivationTensors acts = model->acts;
+    ActivationTensors grads_acts = model->grads_acts;
+
+    // forward: E = mean_loss = 1/(B*T) * Σi(losses[i])
+    // backward: ∂E/∂losses[i] = 1/(B*T)
+    for (int i = 0; i < B * T; i++) { grads_acts.losses[i] = 1.0f / (B * T); }
+
+    // forward: encoder->TransformerL回->layernorm->matmul->softmax->crossentropy
+    // backward: crossentropy_softmax->matmul->layernorm->TransformerL回->encoder
+    crossentropy_softmax_backward(grads_acts.logits, grads_acts.losses, acts.probs, model->targets, B, T, V, Vp);
+    matmul_backward(grads_acts.lnf, grads.wte, NULL, grads_acts.logits, acts.lnf, params.wte, B, T, C, Vp);
+    float* residual = acts.residual3 + (L - 1) * B * T * C;
+    float* dresidual = grads_acts.residual3 + (L - 1) * B * T * C;
+    layernorm_backward(dresidual, grads.lnfw, grads.lnfb, grads_acts.lnf, residual, params.lnfw, acts.lnf_mean, acts.lnf_rstd, B, T, C);
+    for (int l = L - 1; l >= 0; l--) {
+        // forwardではl==0のときに入力にacts.encodedを使用
+        // backwardでは逆を辿るため、l==0の時に勾配をgrads_acts.encodedに流す
+        residual = (l == 0) ? acts.encoded : acts.residual3 + (l - 1) * B * T * C;
+        dresidual = (l == 0) ? grads_acts.encoded : grads_acts.residual3 + (l - 1) * B * T * C;
+
+        float* l_ln1w = params.ln1w + l * C;
+        float* l_qkvw = params.qkvw + l * 3*C * C;
+        float* l_attprojw = params.attprojw + l * C * C;
+        float* l_ln2w = params.ln2w + l * C;
+        float* l_fcw = params.fcw + l * 4*C * C;
+        float* l_fcprojw = params.fcprojw + l * C * 4*C;
+
+        float* l_ln1 = acts.ln1 + l * B * T * C;
+        float* l_ln1_mean = acts.ln1_mean + l * B * T;
+        float* l_ln1_rstd = acts.ln1_rstd + l * B * T;
+        float* l_qkv = acts.qkv + l * B * T * 3*C;
+        float* l_atty = acts.atty + l * B * T * C;
+        float* l_att = acts.att + l * B * NH * T * T;
+        float* l_residual2 = acts.residual2 + l * B * T * C;
+        float* l_ln2 = acts.ln2 + l * B * T * C;
+        float* l_ln2_mean = acts.ln2_mean + l * B * T;
+        float* l_ln2_rstd = acts.ln2_rstd + l * B * T;
+        float* l_fch = acts.fch + l * B * T * 4*C;
+        float* l_fch_gelu = acts.fch_gelu + l * B * T * 4*C;
+
+        float* dl_ln1w = grads.ln1w + l * C;
+        float* dl_ln1b = grads.ln1b + l * C;
+        float* dl_qkvw = grads.qkvw + l * 3*C * C;
+        float* dl_qkvb = grads.qkvb + l * 3*C;
+        float* dl_attprojw = grads.attprojw + l * C * C;
+        float* dl_attprojb = grads.attprojb + l * C;
+        float* dl_ln2w = grads.ln2w + l * C;
+        float* dl_ln2b = grads.ln2b + l * C;
+        float* dl_fcw = grads.fcw + l * 4*C * C;
+        float* dl_fcb = grads.fcb + l * 4*C;
+        float* dl_fcprojw = grads.fcprojw + l * C * 4*C;
+        float* dl_fcprojb = grads.fcprojb + l * C;
+
+        float* dl_ln1 = grads_acts.ln1 + l * B * T * C;
+        float* dl_qkv = grads_acts.qkv + l * B * T * 3*C;
+        float* dl_atty = grads_acts.atty + l * B * T * C;
+        float* dl_preatt = grads_acts.preatt + l * B * NH * T * T;
+        float* dl_att = grads_acts.att + l * B * NH * T * T;
+        float* dl_attproj = grads_acts.attproj + l * B * T * C;
+        float* dl_residual2 = grads_acts.residual2 + l * B * T * C;
+        float* dl_ln2 = grads_acts.ln2 + l * B * T * C;
+        float* dl_fch = grads_acts.fch + l * B * T * 4*C;
+        float* dl_fch_gelu = grads_acts.fch_gelu + l * B * T * 4*C;
+        float* dl_fcproj = grads_acts.fcproj + l * B * T * C;
+        float* dl_residual3 = grads_acts.residual3 + l * B * T * C;
+
+        // forward: layernorm->matmul->attention->matmul->residual->layernorm->matmul->gelu->matmul->residual
+        // backward: residual->matmul->gelu->matmul->layernorm->residual->matmul->attention->matmul->layernorm
+        residual_backward(dl_residual2, dl_fcproj, dl_residual3, B*T*C);
+        matmul_backward(dl_fch_gelu, dl_fcprojw, dl_fcprojb, dl_fcproj, l_fch_gelu, l_fcprojw, B, T, 4*C, C);
+        gelu_backward(dl_fch, l_fch, dl_fch_gelu, B*T*4*C);
+        matmul_backward(dl_ln2, dl_fcw, dl_fcb, dl_fch, l_ln2, l_fcw, B, T, C, 4*C);
+        layernorm_backward(dl_residual2, dl_ln2w, dl_ln2b, dl_ln2, l_residual2, l_ln2w, l_ln2_mean, l_ln2_rstd, B, T, C);
+        residual_backward(dresidual, dl_attproj, dl_residual2, B*T*C);
+        matmul_backward(dl_atty, dl_attprojw, dl_attprojb, dl_attproj, l_atty, l_attprojw, B, T, C, C);
+        attention_backward(dl_qkv, dl_preatt, dl_att, dl_atty, l_qkv, l_att, B, T, C, NH);
+        matmul_backward(dl_ln1, dl_qkvw, dl_qkvb, dl_qkv, l_ln1, l_qkvw, B, T, C, 3*C);
+        layernorm_backward(dresidual, dl_ln1w, dl_ln1b, dl_ln1, residual, l_ln1w, l_ln1_mean, l_ln1_rstd, B, T, C);
+    }
+    encoder_backward(grads.wte, grads.wpe, grads_acts.encoded, model->inputs, B, T, C);
+}
