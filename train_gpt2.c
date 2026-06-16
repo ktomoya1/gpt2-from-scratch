@@ -913,3 +913,33 @@ void gpt2_backward(GPT2* model) {
     }
     encoder_backward(grads.wte, grads.wpe, grads_acts.encoded, model->inputs, B, T, C);
 }
+
+// リファレンス：https://pytorch.org/docs/stable/generated/torch.optim.AdamW.html
+// パラメータの更新を行う
+void gpt2_update(GPT2* model, float learning_rate, float beta1, float beta2, float eps, float weight_decay, int t) {
+    if (model->m_memory == NULL) {
+        // １ステップ目のm,vが式に使われるのでゼロクリアする
+        model->m_memory = (float*)calloc(model->num_parameters, sizeof(float));
+        model->v_memory = (float*)calloc(model->num_parameters, sizeof(float));
+    }
+    for (size_t i = 0; i < model->num_parameters; i++) {
+        float param = model->params_memory[i];
+        float grad = model->grads_memory[i];
+
+        // 一次モーメントの計算(EMA)：勾配を平滑化することで値の振動を抑制する
+        float m = model->m_memory[i] * beta1 + grad * (1 - beta1);
+        // 二次モーメントの計算：過去の勾配を含めたスケールの大きさを計算する
+        float v = model->v_memory[i] * beta2 + grad * grad * (1 - beta2);
+
+        // バイアス補正：EMAで序盤の進みが遅い問題を解決する
+        float m_hat = m / (1 - powf(beta1, t));
+        float v_hat = v / (1 - powf(beta2, t));
+
+        // 次ステップのEMAの更新に生の蓄積値が必要なためm_hat,v_hatではなくm,vを保存
+        model->m_memory[i] = m;
+        model->v_memory[i] = v;
+        // weight decay項：過学習を防ぐため、パラメータを毎ステップ0に引き戻す
+        // m_hat / √v_hat：方向を持つ正規化された更新量。振動しているパラメータは更新量が少なくなる
+        model->params_memory[i] -= learning_rate * (m_hat / (sqrtf(v_hat) + eps) + weight_decay * param);
+    }
+}
