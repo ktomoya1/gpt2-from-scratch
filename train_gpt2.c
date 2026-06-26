@@ -943,3 +943,14 @@ void gpt2_update(GPT2* model, float learning_rate, float beta1, float beta2, flo
         model->params_memory[i] -= learning_rate * (m_hat / (sqrtf(v_hat) + eps) + weight_decay * param);
     }
 }
+
+// xorshift*アルゴリズムによる擬似乱数生成。XORシフトで状態を拡散し、乗算で非線形化する
+unsigned int random_u32(uint64_t *state) {
+    // 異なるシフト量で3回繰り返すことで状態全体のビットを拡散させる
+    *state ^= *state >> 12;
+    *state ^= *state << 25;
+    *state ^= *state >> 27;
+    // 状態値を定数倍することで線形性を排除し、予測不可能性を上げる
+    // 上位32ビットのみ返すことで高品質の出力を得る
+    return (*state * 0x2545F4914F6CDD1Dull) >> 32;
+}
