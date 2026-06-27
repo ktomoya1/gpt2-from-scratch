@@ -954,3 +954,10 @@ unsigned int random_u32(uint64_t *state) {
     // 上位32ビットのみ返すことで高品質の出力を得る
     return (*state * 0x2545F4914F6CDD1Dull) >> 32;
 }
+
+// float型の乱数[0,1)を生成する
+float random_f32(uint64_t *state) {
+    // 高品質にするため下位8ビットをシフトして除外
+    // 残った24ビット整数を2^24で割ることで[0,1)の一様乱数を生成する
+    return (random_u32(state) >> 8) / 16777216.0f;
+}
