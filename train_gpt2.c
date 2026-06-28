@@ -961,3 +961,16 @@ float random_f32(uint64_t *state) {
     // 残った24ビット整数を2^24で割ることで[0,1)の一様乱数を生成する
     return (random_u32(state) >> 8) / 16777216.0f;
 }
+
+// 離散確率分布からサンプリングを行う
+int sample_mult(float* probabilities, int n, float coin) {
+    // coinは[0,1)の一様乱数で、どのインデックスを返すかを決定する
+    // cdfはprobabilities[0...i]の累積値
+    // [0,1)をprobabilitiesの重みで区間分割し、coinがどの区間に落ちるか判定する
+    float cdf = 0.0f;
+    for (int i = 0; i < n; i++) {
+        cdf += probabilities[i];
+        if (cdf > coin) return i;
+    }
+    return n - 1; // 丸め誤差対策（総和が1.0にならないケースに対処）
+}
