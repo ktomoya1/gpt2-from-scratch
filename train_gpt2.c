@@ -5,6 +5,8 @@
 #include <float.h>
 #include <assert.h>
 
+#include "llmc/utils.h"
+
 #define GELU_SCALING_FACTOR sqrtf(2.0f / M_PI)
 
 typedef struct {
@@ -668,6 +670,61 @@ float* malloc_and_point_activations(ActivationTensors* acts, size_t* act_sizes) 
     }
 
     return acts_memory;
+}
+
+// チェックポイントファイルを読み込み、GPT2構造体を初期化する
+void gpt2_build_from_checkpoint(GPT2* model, const char* checkpoint_path) {
+
+    FILE* model_file = fopenCheck(checkpoint_path, "rb");
+
+    // ヘッダーの読み込み
+    int model_header[256];
+    freadCheck(model_header, sizeof(int), 256, model_file);
+    // 20240326はファイルフォーマットの識別子
+    if (model_header[0] != 20240326) { printf("Bad magic model file\n"); exit(1); }
+    if (model_header[1] != 3) { printf("Bad version in model file\n"); exit(1); }
+
+    // GPT2Configの初期化
+    size_t maxT, V, Vp, L, NH, C;
+    model->config.max_seq_len = maxT = model_header[2];
+    model->config.vocab_size = V = model_header[3];
+    model->config.num_layers = L = model_header[4];
+    model->config.num_heads = NH = model_header[5];
+    model->config.channels = C = model_header[6];
+    model->config.padded_vocab_size = Vp = model_header[7];
+    printf("[GPT-2]\n");
+    printf("max_seq_len: %zu\n", maxT);
+    printf("vocab_size: %zu\n", V);
+    printf("padded_vocab_size: %zu\n", Vp);
+    printf("num_layers: %zu\n", L);
+    printf("num_heads: %zu\n", NH);
+    printf("channels: %zu\n", C);
+
+    // num_parameters算出とmalloc_and_point_parametersに必要
+    fill_in_parameter_sizes(model->param_sizes, model->config);
+
+    // 各テンソルのサイズを合計してパラメータ総数を算出する
+    size_t num_parameters = 0;
+    for (size_t i = 0; i < NUM_PARAMETER_TENSORS; i++) {
+        num_parameters += model->param_sizes[i];
+    }
+    model->num_parameters = num_parameters;
+
+    model->params_memory = malloc_and_point_parameters(&model->params, model->param_sizes);
+    // パラメータの初期値をファイルから読み込む
+    freadCheck(model->params_memory, sizeof(float), num_parameters, model_file);
+    fcloseCheck(model_file);
+
+    model->acts_memory = NULL; // gpt2_forwardで初期化
+    model->grads_memory = NULL; // gpt2_backwardで初期化
+    model->m_memory = NULL; // gpt2_updateで初期化
+    model->v_memory = NULL; // gpt2_updateで初期化
+    model->grads_acts_memory = NULL; // gpt2_backwardで初期化
+    model->inputs = NULL; // gpt2_forwardで初期化
+    model->targets = NULL; // gpt2_forwardで初期化
+    model->batch_size = 0; // gpt2_forwardで初期化
+    model->seq_len = 0; // gpt2_forwardで初期化
+    model->mean_loss = -1.0f; // gpt2_forwardで計算される。-1.0fは未計算状態を表す
 }
 
 // model->actsのmalloc＋フォワードの処理＋いくつかの変数をbackward用にキャッシュ
