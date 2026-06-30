@@ -1001,6 +1001,17 @@ void gpt2_update(GPT2* model, float learning_rate, float beta1, float beta2, flo
     }
 }
 
+void gpt2_free(GPT2* model) {
+    free(model->params_memory);
+    free(model->acts_memory);
+    free(model->grads_memory);
+    free(model->grads_acts_memory);
+    free(model->m_memory);
+    free(model->v_memory);
+    free(model->inputs);
+    free(model->targets);
+}
+
 // xorshift*アルゴリズムによる擬似乱数生成。XORシフトで状態を拡散し、乗算で非線形化する
 unsigned int random_u32(uint64_t *state) {
     // 異なるシフト量で3回繰り返すことで状態全体のビットを拡散させる
