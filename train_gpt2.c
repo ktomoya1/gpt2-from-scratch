@@ -105,17 +105,25 @@ typedef struct {
     int seq_len; // 現在のforwardで処理するトークン数（acts再確保の判断に使用）
 } GPT2;
 
+// トークンのインデックスに対応するベクトルを割り当て、位置情報も加える
 void encoder_forward(float* out, int* inp, float* wte, float* wpe, int B, int T, int C) {
-    // out: (B, T, C)
-    // inp: (B, T)
-    // wte: (V, C)
-    // wpe: (maxT, C)
+    // out: (B, T, C) 各位置(b,t)において、トークンと位置情報をまとめたC次元ベクトル
+    // inp: (B, T) 各位置(b,t)のトークンID
+    // wte: (V, C) トークン埋め込み行列(V=語彙数)
+    // wpe: (maxT, C) 位置埋め込み行列
+
+    // Attention機構はトークンの順序を区別しないため、位置情報wpeを注入する必要がある
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
-            int ix = inp[b * T + t];
+            // out[b,t,:]への書き込み位置を計算
             float* out_bt = out + b * T * C + t * C;
+            // (b,t)位置のトークンIDを取得
+            int ix = inp[b * T + t];
+            // トークンIDに対応するwteの行(C次元ベクトル)を取得
             float* wte_ix = wte + ix * C;
+            // 位置tに対応するwpeの行(C次元ベクトル)を取得
             float* wpe_t = wpe + t * C;
+            // トークン埋め込みと位置埋め込みを要素ごとに加算
             for (int c = 0; c < C; c++) {
                 out_bt[c] = wte_ix[c] + wpe_t[c];
             }
@@ -1096,7 +1104,7 @@ int main(void) {
             printf("val loss %f\n", val_loss);
         }
         if (step > 0 && step % 20 == 0) {
-            // サンプルを生成する（1回も学習してないモデル(step==0)からは生成しない）
+            // サンプルを生成する（1回も学習してないモデル(step=0)からは生成しない）
 
             // eot_tokenという値はGPT-2の学習データで文章先頭に挿入される特殊トークン
             // この値でgen_tokensを埋めるで文章の先頭から生成を開始させる
