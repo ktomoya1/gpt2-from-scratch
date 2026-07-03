@@ -4,7 +4,10 @@
 #include <math.h>
 #include <float.h>
 #include <assert.h>
+#include <time.h>
 
+#include "llmc/dataloader.h"
+#include "llmc/tokenizer.h"
 #include "llmc/utils.h"
 
 #define GELU_SCALING_FACTOR sqrtf(2.0f / M_PI)
@@ -1041,4 +1044,101 @@ int sample_mult(float* probabilities, int n, float coin) {
         if (cdf > coin) return i;
     }
     return n - 1; // 丸め誤差対策（総和が1.0にならないケースに対処）
+}
+
+int main(void) {
+    // チェックポイントファイルからGPT2構造体をビルドする
+    GPT2 model;
+    gpt2_build_from_checkpoint(&model, "gpt2_124M.bin");
+
+    // トークンファイルを選択する。tiny_shakespeareファイルが存在すればそちらを使う
+    const char* tiny_stories_train = "dev/data/tinystories/TinyStories_train.bin";
+    const char* tiny_stories_val = "dev/data/tinystories/TinyStories_val.bin";
+    const char* tiny_shakespeare_train = "dev/data/tinyshakespeare/tiny_shakespeare_train.bin";
+    const char* tiny_shakespeare_val = "dev/data/tinyshakespeare/tiny_shakespeare_val.bin";
+    const char* train_tokens = access(tiny_shakespeare_train, F_OK) != -1 ? tiny_shakespeare_train : tiny_stories_train;
+    const char* val_tokens = access(tiny_shakespeare_val, F_OK) != -1 ? tiny_shakespeare_val : tiny_stories_val;
+
+    // 選択したファイルからDataLoader構造体のビルドを行う
+    int B = 4; // つまり４つの独立したトークン列を同時に学習する
+    int T = 64; // トークンの長さ。GPT-2のmaxT(1024)以下でなければならない
+    DataLoader train_loader, val_loader;
+    dataloader_init(&train_loader, train_tokens, B, T, 0, 1, 1); // 学習データはシャッフルするためフラグ1
+    dataloader_init(&val_loader, val_tokens, B, T, 0, 1, 0); // 検証データは同じデータの並びにするためフラグ0
+    printf("train dataset num_batches: %zu\n", train_loader.num_tokens / (B*T));
+    printf("val dataset num_batches: %zu\n", val_loader.num_tokens / (B*T));
+    int val_num_batches = 5;
+
+    // Tokenizerのビルド
+    Tokenizer tokenizer;
+    tokenizer_init(&tokenizer, "gpt2_tokenizer.bin");
+
+    // サンプリング用のメモリ確保
+    uint64_t rng_state = 1337;
+    int* gen_tokens = (int*)mallocCheck(B * T * sizeof(int));
+    const int genT = 64; // 生成するトークン数の上限
+
+    // 学習ループ
+    struct timespec start, end;
+    for (int step = 0; step <= 40; step++) {
+        if (step % 10 == 0) {
+            // 損失の検証を行う
+            // ただし、１バッチではノイズが大きいため複数バッチの平均の損失を測る
+            float val_loss = 0.0f;
+            dataloader_reset(&val_loader); // 同一データで評価するため毎回リセットする
+            for (int i = 0; i < val_num_batches; i++) {
+                dataloader_next_batch(&val_loader);
+                gpt2_forward(&model, val_loader.inputs, val_loader.targets, B, T);
+                // 検証データでパラメータは更新しないためgpt2_backwardは呼ばない
+                val_loss += model.mean_loss;
+            }
+            val_loss /= val_num_batches;
+            printf("val loss %f\n", val_loss);
+        }
+        if (step > 0 && step % 20 == 0) {
+            // サンプルを生成する（1回も学習してないモデル(step==0)からは生成しない）
+
+            // eot_tokenという値はGPT-2の学習データで文章先頭に挿入される特殊トークン
+            // この値でgen_tokensを埋めるで文章の先頭から生成を開始させる
+            for (int i = 0; i < B * T; i++) { gen_tokens[i] = tokenizer.eot_token; }
+
+            printf("generating:\n---\n");
+            for (int t = 1; t < genT; t++) {
+                // 毎回(B,T)全体のforwardを再計算しているので非効率。
+                // また、現在はb=0のケースでしか生成を行っていない
+                gpt2_forward(&model, gen_tokens, NULL, B, T);
+                float* probs = model.acts.probs + (t-1) * model.config.padded_vocab_size;
+                float coin = random_f32(&rng_state);
+                int next_token = sample_mult(probs, model.config.vocab_size, coin);
+                gen_tokens[t] = next_token;
+
+                // 生成されたトークンをTokenizerを使って表示する。使えない場合はフォールバックする
+                if (tokenizer.init_ok) {
+                    const char* token_str = tokenizer_decode(&tokenizer, next_token);
+                    safe_printf(token_str);
+                } else {
+                    printf("%d ", next_token);
+                }
+                fflush(stdout);
+            }
+            printf("\n---\n");
+        }
+        // 学習ステップ本体
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        dataloader_next_batch(&train_loader);
+        gpt2_forward(&model, train_loader.inputs, train_loader.targets, B, T);
+        gpt2_zero_grad(&model);
+        gpt2_backward(&model);
+        gpt2_update(&model, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.0f, step+1);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        double time_elapsed_s = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+        printf("step %d: train loss %f (took %f ms)\n", step, model.mean_loss, time_elapsed_s * 1000);
+    }
+
+    dataloader_free(&train_loader);
+    dataloader_free(&val_loader);
+    tokenizer_free(&tokenizer);
+    gpt2_free(&model);
+    free(gen_tokens);
+    return 0;
 }
