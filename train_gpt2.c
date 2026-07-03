@@ -365,6 +365,8 @@ void attention_backward(float* dinp, float* dpreatt, float* datt,
     }
 }
 
+// 入力したC次元ベクトルをOC次元ベクトルに線形射影する
+// B*TがLOOP_UNROLLで割り切れない場合のmatmul_forwardのフォールバックとして使われる
 void matmul_forward_naive(float* out, const float* inp,
                             const float* weight, const float* bias,
                             int B, int T, int C, int OC) {
@@ -377,6 +379,7 @@ void matmul_forward_naive(float* out, const float* inp,
             for (int o = 0; o < OC; o++) {
                 float val = (bias == NULL) ? 0.0f : bias[o];
                 const float* inp_bt = inp + b * T * C + t * C;
+                // out[b,t,o] = Σ_c(inp[b,t,c]*weight[o,c]) + bias[o] 
                 for (int c = 0; c < C; c++) {
                     val += inp_bt[c] * weight[o * C + c];
                 }
@@ -387,6 +390,8 @@ void matmul_forward_naive(float* out, const float* inp,
     }
 }
 
+// matmul_forward_naiveを高速化した関数
+// weightがトークンが変わるごとにリロードされる無駄を省いている
 void matmul_forward(float* out, const float* inp,
                     const float* weight, const float* bias,
                     int B, int T, int C, int OC) {
@@ -396,11 +401,13 @@ void matmul_forward(float* out, const float* inp,
     // bias: (OC)
     const int LOOP_UNROLL = 8;
     if (B * T % LOOP_UNROLL != 0) {
+        // B*TがLOOP_UNROLLで割り切れないとタイルの境界(obt+ibt)が配列範囲外になるため、naive版にフォールバック
         matmul_forward_naive(out, inp, weight, bias, B, T, C, OC);
         return;
     }
     for (int obt = 0; obt < B * T; obt += LOOP_UNROLL) {
         for (int o = 0; o < OC; o++) {
+            // 計算結果をresultに溜めて、最後にまとめてoutへ書き込む
             float result[LOOP_UNROLL];
             for (int ibt = 0; ibt < LOOP_UNROLL; ibt++) {
                 result[ibt] = (bias == NULL) ? 0.0f : bias[o];
