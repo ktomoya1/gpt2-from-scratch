@@ -528,7 +528,8 @@ void gelu_backward(float* dinp, float* inp, float* dout, int N) {
     }
 }
 
-// logitsにsoftmax関数を適用して確率分布を作る
+// 語彙ごとにsoftmax関数を適用して語彙の確率分布を作る
+// 各(b,t)で確率の合計は1.0になる
 void softmax_forward(float* probs, float* logits, int B, int T, int V, int Vp) {
     // probs, logits: (B, T, Vp)
     for (int b = 0; b < B; b++) {
@@ -536,18 +537,19 @@ void softmax_forward(float* probs, float* logits, int B, int T, int V, int Vp) {
             float* probs_bt = probs + b * T * Vp + t * Vp;
             float* logits_bt = logits + b * T * Vp + t * Vp;
 
-            // maxvalの計算
+            // expfのオーバーフローを防ぐため、maxvalを引いてから指数計算する
+            // softmax(x_i) = exp(x_i) / Σ exp(x_j) = exp(x_i - c) / Σ exp(x_j - c) （シフト可能な理由）
             float maxval = -FLT_MAX;
             for (int v = 0; v < V; v++) {
                 if (logits_bt[v] > maxval) maxval = logits_bt[v];
             }
-            // softmaxの計算
+            // exp計算とその合計の計算
             float expsum = 0.0f;
             for (int v = 0; v < V; v++) {
                 probs_bt[v] = expf(logits_bt[v] - maxval);
                 expsum += probs_bt[v];
             }
-            // [V, Vp)はパディングなのでゼロ埋めする
+            // V未満は正規化、V以上はパディングなのでゼロ埋め
             for (int v = 0; v < Vp; v++) {
                 probs_bt[v] = (v < V) ? probs_bt[v] / expsum : 0.0f;
             }
