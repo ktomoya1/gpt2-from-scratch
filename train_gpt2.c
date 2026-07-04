@@ -157,32 +157,44 @@ void encoder_backward(float* dwte, float* dwpe, float* dout, int* inp,
     }
 }
 
+// 入力を平均0, 分散1に正規化して出力に渡す＋backward用にmean, rstdをキャッシュ
 void layernorm_forward(float* out, float* mean, float* rstd,
                         float* inp, float* weight, float* bias,
                          int B, int T, int C) {
     // out, inp: (B, T, C)
     // weight, bias: (C)
     // mean, rstd: (B, T)
-    float eps = 1e-5f;
+    float eps = 1e-5f; // ゼロ除算防止＋分散がほぼ0の時にrstdが発散しないようにする
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
             float* inp_bt = inp + b * T * C + t * C;
+
+            // 平均の計算
             float m = 0;
             for (int c = 0; c < C; c++) {
                 m += inp_bt[c];
             }
             m /= C;
+
+            // 分散の計算
             float v = 0;
             for (int c = 0; c < C; c++) {
                 float x = inp_bt[c] - m;
                 v += x * x;
             }
             v /= C;
+            // 逆標準偏差を計算
             float rstd_t = 1.0f / sqrtf(v + eps);
+
             float* out_bt = out + b * T * C + t * C;
-            for (int c = 0; c < C; c++) {
-                out_bt[c] = weight[c] * (inp_bt[c] - m) * rstd_t + bias[c];
+            // out[i] = weight[i] * (inp[i] - x_mean) / std + bias[i]
+            // weightとbiasでスケールシフトを行うのは、正規化によって入力分布が平均0,分散1に固定され、
+            // 後続の非線形変換が発揮できる表現力が制限されるのを防ぐため。
+            for (int i = 0; i < C; i++) {
+                out_bt[i] = weight[i] * (inp_bt[i] - m) * rstd_t + bias[i];
             }
+
+            // backward用にキャッシュ
             mean[b * T + t] = m;
             rstd[b * T + t] = rstd_t;
         }
@@ -1114,7 +1126,7 @@ int main(void) {
             // サンプルを生成する（1回も学習してないモデル(step=0)からは生成しない）
 
             // eot_tokenという値はGPT-2の学習データで文章先頭に挿入される特殊トークン
-            // この値でgen_tokensを埋めるで文章の先頭から生成を開始させる
+            // この値でgen_tokensを埋めて文章の先頭から生成を開始させる
             for (int i = 0; i < B * T; i++) { gen_tokens[i] = tokenizer.eot_token; }
 
             printf("generating:\n---\n");
